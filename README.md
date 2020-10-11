@@ -8,7 +8,7 @@ Passwords and password reset tokens are stored using postgres's crypt function t
 
 At present, there is no failed login count or timed delay, but these features are planned.
 
-##Getting started
+## Getting started
 
 Create a database if you don't already have one:
 ```
