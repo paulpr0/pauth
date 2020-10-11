@@ -30,14 +30,12 @@ make the chanege in postgres and change the database URL, or modify the relevant
 See the test reate_user_log_in_pw_reset_delete in models.rs for a walkthrough of the different API calls.
 
 ## Functional Issues to fix (in rough priority order):
-    - use crypt for login_token
     - Count failed logins per 'source'
     - Clean up the API and write sensible example code
     - improve the general documentation
     - write doc tests for each public API call
    
 ## Non-functional issues to fix:
-    - use sql_function! macro for crypt invocation to avoid usnig sql_query all over the place
     - split the queries from the higher level API so that users can have a layer where they provide their own db connection
     - write better and more tests 
     

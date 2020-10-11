@@ -118,13 +118,18 @@ sql_function! {
     fn gen_salt(type_: Text) -> Text;
 }
 
+fn encrypt_password(password:&str) -> Result<String,ApplicationError> {
+
+    let conn = db::connection()?;
+    Ok(select(crypt(password, gen_salt("bf"))).first::<String>(&conn)?)
+}
+
 impl UserUpdate {
     pub fn with_password(password: &str) -> Result<UserUpdate, ApplicationError> {
-        let conn = db::connection()?;
         Ok(UserUpdate {
             chosen_name: None,
             email: None,
-            pass_hash: Some(select(crypt(password, gen_salt("bf"))).first::<String>(&conn)?),
+            pass_hash: Some(encrypt_password(password)?),
         })
     }
     pub fn new() -> UserUpdate {
@@ -172,15 +177,18 @@ impl User {
         //insert cookie (one per device to allow safe explicit log out)
         let uu = Uuid::new_v4();
         let uu = uu.to_hyphenated().to_string();
-        let cookie = NewCookie {
+        let mut cookie = NewCookie {
             user_id: a_user_id,
-            token: uu.clone(),
+            token: encrypt_password(&uu)?,
         };
         let result = diesel::insert_into(user_login_tokens::table)
             .values(&cookie)
             .execute(&conn);
         match result {
-            Ok(s) => Ok(cookie),
+            Ok(s) => {
+                cookie.token=uu;
+                Ok(cookie)
+            },
             Err(e) => Err(ApplicationError::Database(e)),
         }
     }
@@ -324,7 +332,7 @@ impl User {
             .filter(
                 user_id
                     .eq(auth_token.user_id)
-                    .and(token.eq(auth_token.token.clone())),
+                    .and(token.eq(crypt(auth_token.token.clone(), token))),
             )
             .load::<UserLoginToken>(&conn);
         match result {
