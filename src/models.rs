@@ -1,19 +1,13 @@
 use super::db;
 use super::schema::pauth::pw_reset;
 use super::schema::pauth::user_login_tokens;
-//pjr remove these (move to functions that need them)
-use super::schema::pauth::user_login_tokens::dsl::*;
-use super::schema::pauth::user_login_tokens::*;
 use super::schema::pauth::users;
-use super::schema::pauth::users::dsl::*;
-use super::schema::pauth::users::*;
 use crate::pauth_error::ApplicationError;
 use chrono::{NaiveDateTime, Utc};
 use diesel::expression::exists::exists;
 //use diesel::pg::Pg;
-use diesel::sql_types::{Integer, Text, VarChar};
-//pjr won't need sql_query soon...
-use diesel::{prelude::*, select, sql_query, RunQueryDsl};
+use diesel::sql_types::Text;
+use diesel::{prelude::*, select, RunQueryDsl};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use std::iter;
@@ -152,15 +146,16 @@ impl UserUpdate {
 
 impl User {
     pub fn login(name_or_email: &str, pass: &str) -> Result<LoginResult, ApplicationError> {
+        use super::schema::pauth::users::dsl::*;
         let conn = db::connection()?;
         match users
-            .select(users::dsl::id)
+            .select(id)
             .filter(
-                users::dsl::email
+                email
                     .eq(name_or_email)
-                    .or(users::dsl::chosen_name.eq(name_or_email)),
+                    .or(chosen_name.eq(name_or_email)),
             )
-            .filter(users::dsl::pass_hash.eq(crypt(pass, users::dsl::pass_hash)))
+            .filter(pass_hash.eq(crypt(pass, pass_hash)))
             .first::<i32>(&conn)
         {
             Ok(i) => Ok(LoginResult::LoggedIn(User::create_cookie(i)?)),
@@ -169,6 +164,7 @@ impl User {
         }
     }
     fn create_cookie(a_user_id: i32) -> Result<NewCookie, ApplicationError> {
+        use super::schema::pauth::users::dsl::*;
         let conn = db::connection()?;
         let _ = diesel::update(users.find(a_user_id))
             .set(last_login.eq(Utc::now().naive_utc()))
@@ -189,35 +185,13 @@ impl User {
         }
     }
 
-    /* PJR come back to this at the end - looks a bit like check_id
-     */
-    pub fn try_get(name_or_email: &str, cookie: &str) -> Option<Self> {
-        let conn = match db::connection() {
-            Ok(c) => c,
-            Err(e) => return None,
-        };
-        if let Ok(user) = users
-            .filter(chosen_name.eq(name_or_email).or(email.eq(name_or_email)))
-            .first::<User>(&conn)
-        {
-            if let Ok(cookie_match) = UserLoginToken::belonging_to(&user)
-                .filter(token.eq(cookie))
-                .first::<UserLoginToken>(&conn)
-            {
-                //update last used time to now and return user
-                let _ = diesel::update(&cookie_match)
-                    .set(last_used.eq(Utc::now().naive_utc()))
-                    .execute(&conn);
-                return Some(user);
-            }
-        }
-        None
-    }
     pub fn add_user(
         user_name: &str,
         user_email: &str,
         pass: &str,
     ) -> Result<AddUserResult, ApplicationError> {
+        use super::schema::pauth::users::dsl::*;
+        use super::schema::pauth::users;
         let conn = db::connection()?;
 
         let existing = users
@@ -255,6 +229,7 @@ impl User {
         auth_token: &AuthenticatedID,
         pass: &str,
     ) -> Result<DeleteUserResult, ApplicationError> {
+        use super::schema::pauth::users::dsl::*;
         if !User::check_id(auth_token)? {
             return Ok(DeleteUserResult::AuthFailure);
         }
@@ -263,7 +238,7 @@ impl User {
         //check password and delete
         let result = diesel::delete(
             users.filter(
-                users::dsl::id.eq(auth_token.user_id)
+                id.eq(auth_token.user_id)
                     .and(pass_hash.eq(crypt(pass, pass_hash))),
             )
         )
@@ -295,6 +270,7 @@ impl User {
         uid: i32,
         changes: &UserUpdate,
     ) -> Result<ChangeDetailsResult, ApplicationError> {
+        use super::schema::pauth::users::dsl::*;
         let conn = db::connection()?;
         let result = diesel::update(users.find(uid)).set(changes).execute(&conn);
         match result {
@@ -324,6 +300,7 @@ impl User {
     }
 
     pub fn get_user(auth_token: &AuthenticatedID) -> Result<Option<User>, ApplicationError> {
+        use super::schema::pauth::users::dsl::*;
         if !User::check_id(auth_token)? {
             return Ok(None);
         }
@@ -331,7 +308,7 @@ impl User {
         let conn = db::connection()?;
 
         let result = users
-            .filter(users::dsl::id.eq(auth_token.user_id))
+            .filter(id.eq(auth_token.user_id))
             .first(&conn);
         match result {
             Ok(user) => Ok(Some(user)),
@@ -340,6 +317,7 @@ impl User {
     }
 
     pub fn check_id(auth_token: &AuthenticatedID) -> Result<bool, ApplicationError> {
+        use super::schema::pauth::user_login_tokens::dsl::*;
         let conn = db::connection()?;
 
         let result = user_login_tokens
@@ -359,14 +337,15 @@ impl User {
         auth_token: &AuthenticatedID,
         password: &str,
     ) -> Result<bool, ApplicationError> {
+        use super::schema::pauth::users::dsl::*;
         if !User::check_id(auth_token)? {
             return Ok(false);
         }
         let conn = db::connection()?;
         Ok(select(exists(
             users
-                .filter(users::dsl::id.eq(auth_token.user_id))
-                .filter(users::dsl::pass_hash.eq(crypt(password, users::dsl::pass_hash))),
+                .filter(id.eq(auth_token.user_id))
+                .filter(pass_hash.eq(crypt(password, pass_hash))),
         ))
         .get_result(&conn)?)
     }
@@ -375,6 +354,7 @@ impl User {
         name_or_email: &str,
         expires: Option<NaiveDateTime>,
     ) -> Result<Option<String>, ApplicationError> {
+        use super::schema::pauth::users::dsl::*;
         let conn = db::connection()?;
         if let Ok(user) = users
             .filter(chosen_name.eq(name_or_email).or(email.eq(name_or_email)))
@@ -473,20 +453,11 @@ mod tests {
                 AddUserResult::Added(_) => {}
                 AddUserResult::NotAdded(_) => panic!(),
             }
-            //assert_eq!(AddUserResult::Added, res.unwrap());
         }
-    }
+        if let LoginResult::LoggedIn(user_login) = User::login("Paul", "test").unwrap() {
+            User::delete_user(&user_login, "test").unwrap();
+        }
 
-    #[test]
-    fn log_in_paul_then_validate_cookie() {
-        let res = User::login("paul@pr0.co.uk", "test").unwrap();
-        if let LoginResult::LoggedIn(cookie) = res {
-            //assert_eq!(cookie.user_id, 1);
-            let res2 = User::try_get("Paul", &cookie.token).unwrap();
-            assert_eq!("paul@pr0.co.uk", res2.email);
-        } else {
-            panic!()
-        }
     }
 
     #[test]
@@ -552,7 +523,7 @@ mod tests {
 
         //log in with new password
         let login_result = User::login("user94", "new_pass").unwrap();
-        let mut cookie = None;
+        let mut cookie;
         match login_result {
             LoginResult::LoggedIn(cookie2) => {
                 assert_eq!(true, User::check_id(&cookie2).unwrap());
