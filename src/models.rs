@@ -1,15 +1,19 @@
 use super::db;
 use super::schema::pauth::pw_reset;
 use super::schema::pauth::user_login_tokens;
+//pjr remove these (move to functions that need them)
 use super::schema::pauth::user_login_tokens::dsl::*;
 use super::schema::pauth::user_login_tokens::*;
 use super::schema::pauth::users;
 use super::schema::pauth::users::dsl::*;
 use super::schema::pauth::users::*;
 use crate::pauth_error::ApplicationError;
-use chrono::{NaiveDate, NaiveDateTime, Utc};
-use diesel::sql_types::{Integer, Nullable, Text, Timestamp, VarChar};
-use diesel::{prelude::*, sql_query, RunQueryDsl};
+use chrono::{NaiveDateTime, Utc};
+use diesel::expression::exists::exists;
+//use diesel::pg::Pg;
+use diesel::sql_types::{Integer, Text, VarChar};
+//pjr won't need sql_query soon...
+use diesel::{prelude::*, select, sql_query, RunQueryDsl};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use std::iter;
@@ -66,7 +70,6 @@ pub struct NewCookie {
     pub token: String,
 }
 
-
 /*
 Login methods. If a cookie is passed with user email,
 we try to log in with that cookie using try_get, returning a user.
@@ -111,31 +114,24 @@ pub enum ChangeDetailsResult {
     NotChanged(Vec<UserActionFailure>),
     AuthenticationFailure,
 }
+sql_function! {
+    #[sql_name="pauth.crypt"]
+    fn crypt(pw: Text, salt: Text) -> Text;
+}
+
+sql_function! {
+    #[sql_name="pauth.gen_salt"]
+    fn gen_salt(type_: Text) -> Text;
+}
 
 impl UserUpdate {
     pub fn with_password(password: &str) -> Result<UserUpdate, ApplicationError> {
         let conn = db::connection()?;
-        let crypt_sql = "select pauth.crypt($1, pauth.gen_salt('bf')) as pass";
-        #[derive(QueryableByName)]
-        struct Pass {
-            #[sql_type = "VarChar"]
-            pass: String,
-        };
-        if let Some(result) = sql_query(crypt_sql)
-            .bind::<VarChar, _>(password)
-            .load::<Pass>(&conn)?
-            .get(0)
-        {
-            Ok(UserUpdate {
-                chosen_name: None,
-                email: None,
-                pass_hash: Some(result.pass.clone()),
-            })
-        } else {
-            Err(ApplicationError::ApplicationDataLogic(
-                "Unable to generate password from inupt".to_owned(),
-            ))
-        }
+        Ok(UserUpdate {
+            chosen_name: None,
+            email: None,
+            pass_hash: Some(select(crypt(password, gen_salt("bf"))).first::<String>(&conn)?),
+        })
     }
     pub fn new() -> UserUpdate {
         UserUpdate {
@@ -157,44 +153,20 @@ impl UserUpdate {
 impl User {
     pub fn login(name_or_email: &str, pass: &str) -> Result<LoginResult, ApplicationError> {
         let conn = db::connection()?;
-        let sql = "select id, chosen_name, email, pass_hash, last_login \
-         from pauth.users where (email = $1 or chosen_name = $1) \
-         and pass_hash = pauth.crypt($2, pass_hash)"; //, name_or_email, name_or_email, pass);
-        let result = sql_query(sql)
-            .bind::<VarChar, _>(name_or_email)
-            .bind::<Text, _>(pass)
-            .load::<User>(&conn);
-        match result {
-            Ok(v) => {
-                if let Some(user) = v.get(0) {
-                    //set last login to now
-                    /*  let _ = diesel::update(users.find(user.id))
-                        .set(last_login.eq(Utc::now().naive_utc()))
-                        .execute(&conn);
-                    //insert cookie (one per device to allow safe explicit log out)
-                    let uu = Uuid::new_v4();
-                    let uu = uu.to_hyphenated().to_string();
-                    let cookie = NewCookie {
-                        user_id:user.id,
-                        token:uu.clone()
-                    };
-                    let result = diesel::insert_into(user_login_tokens::table)
-                        .values(&cookie)
-                        .execute(&conn);
-                    if result.is_err() {
-                        return Err(ApplicationError::Database(result.err().unwrap()))
-                    }*/
-                    let cookie = User::create_cookie(user.id)?;
-                    //return cookie
-                    Ok(LoginResult::LoggedIn(cookie))
-                } else {
-                    Ok(LoginResult::AuthenticationFailure)
-                }
-            }
+        match users
+            .select(users::dsl::id)
+            .filter(
+                users::dsl::email
+                    .eq(name_or_email)
+                    .or(users::dsl::chosen_name.eq(name_or_email)),
+            )
+            .filter(users::dsl::pass_hash.eq(crypt(pass, users::dsl::pass_hash)))
+            .first::<i32>(&conn)
+        {
+            Ok(i) => Ok(LoginResult::LoggedIn(User::create_cookie(i)?)),
+            Err(diesel::NotFound) => Ok(LoginResult::AuthenticationFailure),
             Err(e) => Err(ApplicationError::Database(e)),
         }
-
-        //Ok("".to_owned())
     }
     fn create_cookie(a_user_id: i32) -> Result<NewCookie, ApplicationError> {
         let conn = db::connection()?;
@@ -220,9 +192,6 @@ impl User {
     /* PJR come back to this at the end - looks a bit like check_id
      */
     pub fn try_get(name_or_email: &str, cookie: &str) -> Option<Self> {
-        //let join = users::table.left_join(user_login_tokens::table);
-        //probably somewhat inefficient, but will do for now
-        //seems to be the "ORM" way of doing things
         let conn = match db::connection() {
             Ok(c) => c,
             Err(e) => return None,
@@ -249,12 +218,6 @@ impl User {
         user_email: &str,
         pass: &str,
     ) -> Result<AddUserResult, ApplicationError> {
-        /*
-        insert into users(chosen_name, email, pass) values
-        (chosen_name, email, crypt(pass, gen_salt('bf')));
-        */
-        //check if username or email exists
-
         let conn = db::connection()?;
 
         let existing = users
@@ -272,34 +235,19 @@ impl User {
                 return Ok(AddUserResult::NotAdded(failures));
             }
         }
-
-        let sql = "insert into pauth.users(chosen_name, email, pass_hash) \
-        values ($1, $2, pauth.crypt($3, pauth.gen_salt('bf'))) returning id, chosen_name, email, pass_hash, last_login"; //, user_name, user_email, pass);
-        let result = sql_query(sql)
-            .bind::<VarChar, _>(user_name)
-            .bind::<VarChar, _>(user_email)
-            .bind::<Text, _>(pass)
-            .load::<User>(&conn);
-        match result {
-            Ok(mut v) => {
-                if v.is_empty() {
-                    Err(ApplicationError::ApplicationDataLogic("No data returned from 'insert ... returning' query attempting to add new user".to_owned()))
-                } else {
-                    let login_result = User::login(user_email, pass)?;
-                    match login_result {
-                        LoginResult::LoggedIn(uid) => Ok(AddUserResult::Added(uid)),
-                        LoginResult::AuthenticationFailure => {
-                            Err(ApplicationError::ApplicationDataLogic(
-                                "Unable to login after creating user".to_owned(),
-                            ))
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                //does the user already exist
-                Err(ApplicationError::Database(e))
-            }
+        diesel::insert_into(users::table)
+            .values((
+                chosen_name.eq(user_name),
+                email.eq(user_email),
+                pass_hash.eq(crypt(pass, gen_salt("bf"))),
+            ))
+            .execute(&conn)?;
+        let login_result = User::login(user_email, pass)?;
+        match login_result {
+            LoginResult::LoggedIn(uid) => Ok(AddUserResult::Added(uid)),
+            LoginResult::AuthenticationFailure => Err(ApplicationError::ApplicationDataLogic(
+                "Unable to login after creating user".to_owned(),
+            )),
         }
     }
 
@@ -313,12 +261,13 @@ impl User {
 
         let conn = db::connection()?;
         //check password and delete
-        let sql = "delete from pauth.users \
-         where (id = $1 and pass_hash = pauth.crypt($2, pass_hash))"; //, name_or_email, name_or_email, pass);
-        let result = sql_query(sql)
-            .bind::<Integer, _>(auth_token.user_id)
-            .bind::<Text, _>(pass)
-            .execute(&conn);
+        let result = diesel::delete(
+            users.filter(
+                users::dsl::id.eq(auth_token.user_id)
+                    .and(pass_hash.eq(crypt(pass, pass_hash))),
+            )
+        )
+        .execute(&conn);
         match result {
             Ok(size) => {
                 if size > 0 {
@@ -414,22 +363,12 @@ impl User {
             return Ok(false);
         }
         let conn = db::connection()?;
-        let pass_check_sql =
-            "select id from pauth.users where (id = $1 and pass_hash = pauth.crypt($2, pass_hash))";
-        let result = sql_query(pass_check_sql)
-            .bind::<Integer, _>(auth_token.user_id)
-            .bind::<Text, _>(password)
-            .execute(&conn);
-        match result {
-            Ok(size) => {
-                if size > 0 {
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-            Err(e) => Err(ApplicationError::Database(e)),
-        }
+        Ok(select(exists(
+            users
+                .filter(users::dsl::id.eq(auth_token.user_id))
+                .filter(users::dsl::pass_hash.eq(crypt(password, users::dsl::pass_hash))),
+        ))
+        .get_result(&conn)?)
     }
 
     pub fn generate_pw_reset(
@@ -443,18 +382,14 @@ impl User {
         {
             //generate a pw_reset and return the string
             let tok = generate_random_string(20);
-
-            let sql = "insert into pauth.pw_reset(user_id, user_token_hash, expires) \
-            values ($1, pauth.crypt($2, pauth.gen_salt('bf')), $3) "; //, user_name, user_email, pass);
-            let result = sql_query(sql)
-                .bind::<Integer, _>(user.id)
-                .bind::<Text, _>(tok.clone())
-                .bind::<Nullable<Timestamp>, _>(expires)
-                .execute(&conn);
-            match result {
-                Ok(_) => Ok(Some(tok)),
-                Err(e) => Err(ApplicationError::Database(e)),
-            }
+            diesel::insert_into(pw_reset::table)
+                .values((
+                    pw_reset::dsl::user_id.eq(user.id),
+                    pw_reset::dsl::user_token_hash.eq(crypt(tok.clone(), gen_salt("bf"))),
+                    pw_reset::dsl::expires.eq(expires),
+                ))
+                .execute(&conn)?;
+            Ok(Some(tok))
         } else {
             Ok(None)
         }
@@ -465,18 +400,27 @@ impl User {
         reset_token: String,
     ) -> Result<Option<i32>, ApplicationError> {
         let conn = db::connection()?;
-        let sql = "select users.id \
-         from pauth.pw_reset, pauth.users where (email = $1 or chosen_name = $1) \
-         and user_token_hash = pauth.crypt($2, user_token_hash) and (expires is null or expires > now())"; //, name_or_email, name_or_email, pass);
-        let result = sql_query(sql)
-            .bind::<VarChar, _>(name_or_email)
-            .bind::<Text, _>(reset_token)
-            .load::<UserID>(&conn);
-        match result {
-            Ok(u) if u.len() == 1 => Ok(u.first().map(|u| u.id)),
-            Ok(_) => Ok(None),
-            Err(e) => Err(ApplicationError::Database(e)),
-        }
+
+        Ok(users::table
+            .left_join(pw_reset::table)
+            .select(users::dsl::id)
+            .filter(
+                users::dsl::chosen_name
+                    .eq(name_or_email)
+                    .or(users::dsl::email.eq(name_or_email)),
+            )
+            .filter(
+                pw_reset::user_token_hash
+                    .eq(crypt(reset_token.clone(), pw_reset::dsl::user_token_hash)),
+            )
+            .filter(
+                pw_reset::dsl::expires
+                    .is_null()
+                    .or(pw_reset::dsl::expires.gt(diesel::dsl::now)),
+            )
+            .load(&conn)?
+            .first()
+            .cloned())
     }
 
     pub fn validate_pw_reset(
@@ -621,7 +565,8 @@ mod tests {
             cookie.as_ref().unwrap(),
             "new_pass",
             UserUpdate::new().with_email("new_email@pr0.co.uk"),
-        );
+        )
+        .unwrap();
 
         //log in with new email
         let login_result = User::login("new_email@pr0.co.uk", "new_pass").unwrap();
