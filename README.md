@@ -4,7 +4,7 @@ It has features for password reset and authentication tokens (e.g. a session coo
 
 The current status is very much alpha - it compiles and the tests pass, but the API is not stable, and there are features not present that would likely preclude its use for real work.
 
-Passwords and password reset tokens are stored using postgres's crypt function to provide well salted, secure passwords. At present, login tokens are not, which would provide anyone with access to the database with a way of impersonating a user, so this will be fixed soon.
+Passwords, login tokens (cookies) and password reset tokens are stored using postgres's crypt function to provide well salted, secure passwords. 
 
 At present, there is no failed login count or timed delay, but these features are planned.
 
@@ -25,12 +25,15 @@ postgres://someuser:somepass@localhost:5432/pauth
 ```
 The first time you use the library (for example running the create_user_log_in_pw_reset_delete() test), we will run diesel migrations so you should see a new schema in your database named pauth at that point
 the pauth schema will be owned by a new user pauth_admin which has the password 'pauth_admin_password' by default. To change this, either 
-make the chanege in postgres and change the database URL, or modify the relevant lines in up.sql.
+make the change in postgres and change the database URL, or modify the relevant lines in up.sql.
 
-See the test reate_user_log_in_pw_reset_delete in models.rs for a walkthrough of the different API calls.
+See the test create_user_log_in_pw_reset_delete in models.rs for a walkthrough of the different API calls.
 
 ## Functional Issues to fix (in rough priority order):
     - Count failed logins per 'source'
+    - Max failed auth attempts before require reset
+    - Email on new source / failure
+    - Config as pg table (some of the above could be per user)
     - Clean up the API and write sensible example code
     - improve the general documentation
     - write doc tests for each public API call
@@ -40,7 +43,7 @@ See the test reate_user_log_in_pw_reset_delete in models.rs for a walkthrough of
     - write better and more tests 
     
 ## Why?
-This project exists becuase I frequently need to create something to handle users and authenticate them for toy systems I create.
+This project exists because I frequently need to create something to handle users and authenticate them for toy systems I create.
 In the past these have always been ad-hoc, and the user authentication has been tied to other attributes relevant to the user of that particular system.
 Handling the different interactions a user has with authentication is fairly standard, and boring to re-implement, so the aim
 is to implement it once here in a sensible way so that all my future pet rust projects *(and maybe yours too)* can get on with solving more interesting problems 
