@@ -22,7 +22,7 @@ pub use models::{
     AddUserResult,
     DeleteUserResult,
     ChangeDetailsResult,
-    Reason
+    Reason,
     UserUpdate
 };
 
