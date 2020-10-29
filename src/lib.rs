@@ -8,10 +8,21 @@ mod models;
 mod pauth_error;
 mod schema;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+pub use models::{
+    login,
+    check_id,
+    check_id_and_password,
+    add_user,
+    change_details,
+    delete_user,
+    validate_pw_reset,
+    AuthenticatedID,
+    LoginResult,
+    UserActionFailure,
+    AddUserResult,
+    DeleteUserResult,
+    ChangeDetailsResult,
+    Reason
+    UserUpdate
+};
+
