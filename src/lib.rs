@@ -13,6 +13,7 @@ pub use models::{
     check_id,
     check_id_and_password,
     add_user,
+    get_user,
     change_details,
     delete_user,
     validate_pw_reset,
@@ -26,3 +27,6 @@ pub use models::{
     UserUpdate
 };
 
+pub fn run_db_migrations() {
+    db::init()
+}

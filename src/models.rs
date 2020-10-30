@@ -18,7 +18,7 @@ pub struct User {
     pub id: i32,
     pub chosen_name: String,
     pub email: String,
-    pub pass_hash: String,
+    pass_hash: String,
     pub last_login: NaiveDateTime,
 }
 
@@ -178,7 +178,7 @@ fn create_cookie(a_user_id: i32) -> Result<NewCookie, ApplicationError> {
         .values(&cookie)
         .execute(&conn);
     match result {
-        Ok(s) => {
+        Ok(_) => {
             cookie.token = uu;
             Ok(cookie)
         }
@@ -191,6 +191,7 @@ pub fn add_user(
     user_email: &str,
     pass: &str,
 ) -> Result<AddUserResult, ApplicationError> {
+    #[allow(unused_imports)]
     use super::schema::pauth::users;
     use super::schema::pauth::users::dsl::*;
     let conn = db::connection()?;
@@ -258,10 +259,9 @@ pub fn delete_user(
 
 pub fn change_details(
     auth_token: &AuthenticatedID,
-    password: &str,
     changes: &UserUpdate,
 ) -> Result<ChangeDetailsResult, ApplicationError> {
-    if !check_id_and_password(auth_token, password)? {
+    if !check_id(auth_token)? {
         return Ok(ChangeDetailsResult::AuthenticationFailure);
     }
     update_details(auth_token.user_id, changes)
@@ -282,18 +282,6 @@ fn update_details(uid: i32, changes: &UserUpdate) -> Result<ChangeDetailsResult,
             }
         }
         Err(e) => Err(ApplicationError::Database(e)),
-    }
-}
-
-pub fn change_details_with_pw_reset_token(
-    name_or_email: &str,
-    reset_token: String,
-    change: &UserUpdate,
-) -> Result<ChangeDetailsResult, ApplicationError> {
-    if let Some(u) = check_pw_reset(name_or_email, reset_token)? {
-        update_details(u, change)
-    } else {
-        Ok(ChangeDetailsResult::AuthenticationFailure)
     }
 }
 
@@ -423,7 +411,7 @@ fn generate_random_string(len: usize) -> String {
 mod tests {
     use crate::models::*;
     use crate::models::{
-        AddUserResult, AuthenticatedID, ChangeDetailsResult, DeleteUserResult, LoginResult,
+        AddUserResult, ChangeDetailsResult, DeleteUserResult, LoginResult,
         UserUpdate,
     };
     use std::env;
@@ -466,11 +454,11 @@ mod tests {
     fn create_user_log_in_pw_reset_delete() {
         setup();
         let user = add_user("user94", "user94@pr0.co.uk", "pass94").unwrap();
-        let mut a_user_id = None;
-        let mut cookie = None;
+        let _a_user_id;
+        let cookie;
         match user {
             AddUserResult::Added(auth_id) => {
-                a_user_id = Some(auth_id.user_id);
+                _a_user_id = Some(auth_id.user_id);
                 cookie = Some(auth_id);
             }
             AddUserResult::NotAdded(_) => {
@@ -492,7 +480,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let mut auth_token = None;
+        let auth_token;
         //authenticate a pw_reset
         match validate_pw_reset("user94", pw_reset_token.clone()).unwrap() {
             LoginResult::LoggedIn(id) => {
@@ -505,7 +493,9 @@ mod tests {
         //change the password
         let new_pass = UserUpdate::with_password("new_pass").unwrap();
 
-        match change_details_with_pw_reset_token("user94", pw_reset_token, &new_pass).unwrap()
+
+
+        match change_details(&auth_token.unwrap(), &new_pass).unwrap()
         {
             ChangeDetailsResult::Changed => {}
             _ => panic!("Change details with pw reset token failed"),
@@ -529,14 +519,13 @@ mod tests {
         //change the email
         change_details(
             cookie.as_ref().unwrap(),
-            "new_pass",
             UserUpdate::new().with_email("new_email@pr0.co.uk"),
         )
         .unwrap();
 
         //log in with new email
         let login_result = login("new_email@pr0.co.uk", "new_pass").unwrap();
-        cookie = None;
+        //cookie = None;
         match login_result {
             LoginResult::LoggedIn(c) => {
                 assert_eq!(true, check_id(&c).unwrap());
