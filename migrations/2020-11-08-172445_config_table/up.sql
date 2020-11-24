@@ -21,6 +21,43 @@ create table pauth.user_config (
     constraint user_and_config_unique unique (user_id, config_id)
 );
 
+create table pauth.source(
+    id serial primary key not null,
+    ip inet,
+    mac macaddr,
+    identifier text
+);
+
+-- history table for logins
+--  route is an optional field for use when
+--  users could log in via different routes (app, website, cmd)
+create table pauth.login_history(
+    id serial primary key not null,
+    user_id integer references pauth.users(id),
+    login_time timestamp without time zone default now(),
+    source integer references pauth.source(id),
+    route text
+);
+
+create table pauth.auth_history(
+  id serial primary key not null,
+  user_id integer references pauth.users(id),
+  auth_time timestamp without time zone default now(),
+  source integer references pauth.source(id),
+  route text
+);
+
+-- store the old details with change time where they have changed
+-- unchanged columns should be null.
+create table pauth.user_history(
+    id serial primary key not null,
+    user_id integer references pauth.users(id),
+    change_time timestamp without time zone default now(),
+    old_chosen_name varchar,
+    old_email varchar,
+    old_pass text
+);
+
 -- the with cfg as... consruct inserts a reference to the newly created
 -- config into pauth.default_config
 with cfg as (insert into pauth.config(config_key, config_value)

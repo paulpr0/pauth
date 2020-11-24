@@ -33,11 +33,11 @@ See the test create_user_log_in_pw_reset_delete in models.rs for a walkthrough o
     - Count failed logins per 'source'
     - Max failed auth attempts before require reset
     - Email on new source / failure
-    - Config as pg table (some of the above could be per user)
     - Clean up the API and write sensible example code
     - improve the general documentation
     - write doc tests for each public API call
-   
+    - allow disable user (rather than just delete)
+      
 ## Non-functional issues to fix:
     - split the queries from the higher level API so that users can have a layer where they provide their own db connection
     - write better and more tests 
